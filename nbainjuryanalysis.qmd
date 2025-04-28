@@ -316,6 +316,6 @@ playerSummary$predicted_risk2 <- predict(treeModelWithTotal, playerSummary)
 playerSummary$predicted_risk_rf <- predict(rfModel, playerSummary)
 playerSummary$predicted_risk_xgb <- predict(xgbModel, xData)
 
-head(playerSummary[order(-playerSummary$predicted_risk), ], 100)
+head(playerSummary[order(-playerSummary$predicted_risk), ], 1000)
 
 ```
