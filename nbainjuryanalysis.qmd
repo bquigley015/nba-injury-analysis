@@ -1,0 +1,321 @@
+---
+title: "NBA Injury Analysis"
+subtitle: CS 750 Machine Learning
+output:
+  format: pdf
+---
+
+```{R}
+#install.packages("tidyverse")
+#install.packages("lubridate")
+library(tidyverse)
+library(lubridate)
+
+data <- read_csv("injury.csv",
+               col_types = cols(
+                 Date        = col_date(format = ""),
+                 Acquired    = col_character(),
+                 Relinquished= col_character(),
+                 .default    = col_guess()
+               ))
+
+
+cutoff <- ymd("2000-10-30")
+dataClean <- data %>%
+  filter(Date > cutoff)
+
+
+dataClean <- dataClean %>%
+  filter(is.na(Acquired))
+
+
+
+write_csv(dataClean, "cleaninjury.csv")
+
+
+```
+```{R}
+library(tidyverse)
+stats <- read_csv("playerstats.csv",
+                  col_types = cols(
+                    season = col_character(),
+                    draft_year = col_integer(),
+                    .default = col_guess()
+                  ))
+
+
+stats <- stats %>%
+  mutate(season_start = as.integer(str_sub(season, 1, 4)))
+
+
+statsClean <- stats %>%
+  filter(
+    season_start >= 2000,
+    draft_year   >= 2000
+  )
+  
+
+write_csv(statsClean, "cleanplayerstats.csv")
+
+```
+
+
+
+```{R}
+library(readr)
+library(tidyverse)
+
+injuries <- read_csv("cleaninjury.csv")
+
+
+stats <- read_csv("cleanplayerstats.csv")
+                  
+
+injuries$Date <- as.Date(injuries$Date, format = "%m/%d/%Y")
+injuries$injury_year <- as.numeric(format(injuries$Date, "%Y"))
+
+stats$season_start <- as.numeric(stats$season_start)
+
+stats$injury_notes <- NA_character_
+stats$injury_count <- 0
+
+for(i in seq_len(nrow(injuries))) {
+  nm   <- injuries$Relinquished[i]
+  yr   <- injuries$injury_year[i]
+  note <- injuries$Notes[i]
+  
+  idx <- which(stats$player_name == nm & stats$season_start == yr)
+  
+  if(length(idx) > 0) {
+    for(j in idx) {
+      stats$injury_notes[j] <- note
+      stats$injury_count[j]   <- stats$injury_count[j] + 1
+    }
+  }
+}
+
+write.csv(stats, "statsinjuries.csv", row.names = FALSE)
+
+
+```
+
+
+```{R}
+library(dplyr)
+library(stringr)
+
+
+statsInjruies <- read_csv("statsinjuries.csv")
+
+bodyParts <- c("knee", "ankle", "shoulder", "back", "elbow", "foot", "wrist", "hand", "neck", "thumb", "groin")
+
+simplifyInjuryNotes <- function(note) {
+  if (!is.na(note)) {
+    for (part in bodyParts) {
+      if (str_detect(note, fixed(part, ignore_case = TRUE))) {
+        return(part)
+      }
+    }
+    return("other")
+  }
+  return(NA)  
+}
+
+statsInjruies <- statsInjruies %>%
+  mutate(simplified_injury = sapply(injury_notes, simplifyInjuryNotes)) %>%
+  mutate(simplified_injury = as.character(simplified_injury))  
+
+write.csv(statsInjruies, "statsinjuries.csv", row.names = FALSE)
+
+```
+
+
+
+```{R}
+# --------------------------------------------LOG REG--------------------------------------------------
+library(dplyr)
+library(stringr)
+library(caret)  
+
+
+statsInjruies <- read_csv("statsinjuries.csv")
+
+statsInjruies <- statsInjruies %>%
+  mutate(injuryOccurred = ifelse(!is.na(simplified_injury) & simplified_injury != "other", 1, 0))
+
+
+logitModel <- glm(injuryOccurred ~ player_name + team_abbreviation + age + player_height + player_weight + season_start, 
+                   data = statsInjruies, 
+                   family = binomial)
+
+
+summary(logitModel)
+
+predictions <- predict(logitModel, type = "response")
+predictedClasses <- ifelse(predictions > 0.5, 1, 0)
+
+confusionMatrix(as.factor(predictedClasses), as.factor(statsInjruies$injuryOccurred))
+```
+
+```{r}
+#------------------------------------PLOTS--------------------------------------
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+
+statsInjruies <- read_csv("statsinjuries.csv")
+
+retired <- c("Andrew Bogut", "Dwyane Wade", "Andre Iguodala", "Devin Harris", "Tyson Chandler")
+
+statsInjruies <- statsInjruies %>%
+  mutate(
+    simplified_injury = as.factor(simplified_injury)
+  )
+
+
+ggplot(
+    statsInjruies %>% filter(!is.na(simplified_injury)), 
+    aes(x = simplified_injury)
+  ) +
+  geom_bar() +
+  labs(
+    title = "Count of Injuries by Simplified Type",
+    x     = "Simplified Injury",
+    y     = "Number of Injuries"
+  ) +
+  theme_minimal()
+
+
+topPlayers <- statsInjruies %>%
+  filter(!player_name %in% retired) %>%           
+  group_by(player_name) %>%
+  summarise(total_injuries = sum(injury_count, na.rm = TRUE)) %>%
+  arrange(desc(total_injuries)) %>%
+  slice_head(n = 10)                                
+
+
+ggplot(topPlayers, aes(x = reorder(player_name, total_injuries), y = total_injuries)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title =  "Top 10 Active Players by Total Injuries",
+    x     =  "Player Name",
+    y     =  "Total Injuries"
+  ) +
+  theme_minimal()
+
+
+seasonTotals <- statsInjruies %>%
+  group_by(season_start) %>%
+  summarise(total_injuries = sum(injury_count, na.rm = TRUE)) %>%
+  arrange(season_start)
+
+ggplot(seasonTotals, aes(x = season_start, y = total_injuries)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Total Injuries by Season Start Year",
+    x = "Season Start Year",
+    y = "Total Injuries"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{R}
+#install.packages("rpart.plot")
+#install.packages("xgboost")
+#install.packages("randomForest")
+library(dplyr)
+library(readr)
+library(rpart)
+library(rpart.plot)
+library(xgboost)
+library(randomForest)
+library(caret)
+
+statsInjruies <- read_csv("statsinjuries.csv")
+
+statsInjruies <- statsInjruies %>%
+  arrange(player_name, season_start) %>%
+  group_by(player_name) %>%
+  mutate(prev_injury = lag(simplified_injury, order_by = season_start)) %>%
+  ungroup()
+
+statsInjruies$prev_injury[is.na(statsInjruies$prev_injury)] <- "No Injury"
+
+playerSummary <- statsInjruies %>%
+  group_by(player_name) %>%
+  summarise(
+    age = max(age, na.rm = TRUE),
+    height = max(player_height, na.rm = TRUE),
+    weight = max(player_weight, na.rm = TRUE),
+    avg_gp = mean(gp, na.rm = TRUE),
+    total_injuries = sum(injury_count, na.rm = TRUE),
+    prev_injury = last(prev_injury)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    injury_risk = total_injuries / max(total_injuries, na.rm = TRUE)  
+  )
+
+playerSummary$prev_injury <- as.factor(playerSummary$prev_injury)
+
+
+treeModel <- rpart(
+  injury_risk ~ age + height + weight + avg_gp + prev_injury,
+  data = playerSummary,
+  method = "anova"
+)
+
+treeModelWithTotal <- rpart(
+  injury_risk ~ age + height + weight + avg_gp + total_injuries + prev_injury,
+  data = playerSummary,
+  method = "anova"
+)
+
+
+set.seed(1) 
+rfModel <- randomForest(
+  injury_risk ~ age + height + weight + avg_gp + total_injuries + prev_injury,
+  data = playerSummary,
+  ntree = 500,          
+  mtry = 3,             
+  importance = TRUE     
+)
+
+dummy <- dummyVars(~ prev_injury, data = playerSummary)
+encoded <- predict(dummy, playerSummary)
+
+xData <- model.matrix(injury_risk ~ age + height + weight + avg_gp + total_injuries, data = playerSummary)[, -1]
+xData <- cbind(xData, encoded)
+yData <- playerSummary$injury_risk
+
+xgbModel <- xgboost(
+  data = xData,
+  label = yData,
+  nrounds = 100,         
+  objective = "reg:squarederror",
+  eta = 0.1,            
+  max_depth = 4          
+)
+
+rpart.plot(treeModel, main = "Injury Risk Prediction Tree")
+rpart.plot(treeModelWithTotal, main = "Injury Risk Prediction Tree with Total Injuries")
+
+varImpPlot(rfModel, main = "Random Forest Variable Importance")
+
+importance_matrix <- xgb.importance(model = xgbModel)
+xgb.plot.importance(importance_matrix, top_n = 10, main = "XGBoost Variable Importance")
+
+
+playerSummary$predicted_risk <- predict(treeModel, playerSummary)
+playerSummary$predicted_risk2 <- predict(treeModelWithTotal, playerSummary)
+playerSummary$predicted_risk_rf <- predict(rfModel, playerSummary)
+playerSummary$predicted_risk_xgb <- predict(xgbModel, xData)
+
+head(playerSummary[order(-playerSummary$predicted_risk), ], 100)
+
+```
