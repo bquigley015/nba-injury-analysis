@@ -144,7 +144,7 @@ statsInjruies <- statsInjruies %>%
   mutate(injuryOccurred = ifelse(!is.na(simplified_injury) & simplified_injury != "other", 1, 0))
 
 
-logitModel <- glm(injuryOccurred ~ player_name + team_abbreviation + age + player_height + player_weight + season_start, 
+logitModel <- glm(injuryOccurred ~ age + player_height + player_weight + season_start + injury_count + gp, 
                    data = statsInjruies, 
                    family = binomial)
 
